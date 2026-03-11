@@ -116,7 +116,7 @@ app.get('/callback', async function(req, res) {
   const code = req.query.code;
   
   if (!code) {
-    return res.send('<script>window.close();</script>');
+    return res.send('<scr'+'ipt>window.close();</scr'+'ipt>');
   }
   
   try {
@@ -140,10 +140,10 @@ app.get('/callback', async function(req, res) {
     spotifyTokens.expires_at = Date.now() + (data.expires_in * 1000);
     
     console.log('[SPOTIFY] Connected successfully');
-    res.send('<script>window.close();</script>');
+    res.send('<scr'+'ipt>window.close();</scr'+'ipt>');
   } catch (err) {
     console.error('[SPOTIFY] Auth error:', err);
-    res.send('<script>window.close();</script>');
+    res.send('<scr'+'ipt>window.close();</scr'+'ipt>');
   }
 });
 
