@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Break Timer</title>
   
-  <!-- ==========================================
-       MODULE CONFIGURATION
-       ========================================== -->
   <script type="application/json" id="module-config">
   {
     "id": "timer",
@@ -22,12 +19,11 @@
     "dependencies": []
   }
   </script>
-  
+
   <!-- ==========================================
        SERVER MODULE CODE
        ========================================== -->
   <script type="text/x-server-module">
-// Initialize timer state
 if (!moduleStates.timer) {
   moduleStates.timer = {
     duration: 0,
@@ -37,763 +33,445 @@ if (!moduleStates.timer) {
     isRunning: false,
     isPaused: false,
     wasSkipped: false,
-    language: 'de',
-    musicConnected: false
+    language: 'en',
+    musicConnected: false,
+    _preFadeVolume: 50
   };
 }
 
 const timerState = moduleStates.timer;
 
-// Helper functions
 function getTimerRemaining() {
-  if (!timerState.isRunning) {
-    return 0;
-  }
-  
-  if (timerState.isPaused) {
-    return timerState.pausedRemaining;
-  }
-  
-  const now = Date.now();
-  const elapsed = Math.floor((now - timerState.startTime) / 1000);
-  const remaining = Math.max(0, timerState.duration - elapsed);
-  
-  return remaining;
+  if (!timerState.isRunning) return 0;
+  if (timerState.isPaused) return timerState.pausedRemaining;
+  const elapsed = Math.floor((Date.now() - timerState.startTime) / 1000);
+  return Math.max(0, timerState.duration - elapsed);
 }
 
 function getTimerEndTime() {
-  if (!timerState.isRunning || timerState.isPaused) {
-    return null;
-  }
-  
+  if (!timerState.isRunning || timerState.isPaused) return null;
   return timerState.startTime + (timerState.duration * 1000);
 }
 
-// Routes
-app.get('/api/timer', getUserFromSession, (req, res) => {
-  const remaining = getTimerRemaining();
-  const endTime = getTimerEndTime();
-  
+function triggerSpotifyFade(fromVol, toVol) {
+  if (!moduleStates.spotify) return;
+  moduleStates.spotify.previousVolume = fromVol;
+  moduleStates.spotify.targetVolume   = toVol;
+  moduleStates.spotify.fadeStartTime  = Date.now();
+  moduleStates.spotify.fadeDirection  = 'fade';
+  console.log('[TIMER] Spotify fade: ' + fromVol + '% -> ' + toVol + '%');
+}
+
+app.get('/api/timer', getUserFromSession, function(req, res) {
   res.json({
-    duration: timerState.duration,
-    remaining: remaining,
-    endTime: endTime,
-    isRunning: timerState.isRunning,
-    isPaused: timerState.isPaused,
-    wasSkipped: timerState.wasSkipped,
-    language: timerState.language,
+    duration:       timerState.duration,
+    remaining:      getTimerRemaining(),
+    endTime:        getTimerEndTime(),
+    isRunning:      timerState.isRunning,
+    isPaused:       timerState.isPaused,
+    wasSkipped:     timerState.wasSkipped,
+    language:       timerState.language,
     musicConnected: timerState.musicConnected
   });
 });
 
-app.get('/api/timer/public', (req, res) => {
-  const remaining = getTimerRemaining();
-  const endTime = getTimerEndTime();
-  
+app.get('/api/timer/public', function(req, res) {
   res.json({
-    duration: timerState.duration,
-    remaining: remaining,
-    endTime: endTime,
-    isRunning: timerState.isRunning,
-    isPaused: timerState.isPaused,
+    duration:   timerState.duration,
+    remaining:  getTimerRemaining(),
+    endTime:    getTimerEndTime(),
+    isRunning:  timerState.isRunning,
+    isPaused:   timerState.isPaused,
     wasSkipped: timerState.wasSkipped,
-    language: timerState.language
+    language:   timerState.language
   });
 });
 
-app.post('/api/timer/start', getUserFromSession, (req, res) => {
-  const { minutes } = req.body;
-  
-  if (!minutes || minutes <= 0) {
-    return res.status(400).json({ error: 'Invalid minutes' });
-  }
-  
-  const seconds = minutes * 60;
-  
-  timerState.duration = seconds;
-  timerState.startTime = Date.now();
-  timerState.pausedAt = null;
+app.post('/api/timer/start', getUserFromSession, function(req, res) {
+  const minutes = req.body.minutes;
+  if (!minutes || minutes <= 0) return res.status(400).json({ error: 'Invalid minutes' });
+
+  timerState.duration        = minutes * 60;
+  timerState.startTime       = Date.now();
+  timerState.pausedAt        = null;
   timerState.pausedRemaining = 0;
-  timerState.isRunning = true;
-  timerState.isPaused = false;
-  timerState.wasSkipped = false;
-  
-  console.log(`[TIMER] Started: ${minutes} min (${seconds}s)`);
-  console.log(`[TIMER] End time: ${new Date(getTimerEndTime()).toISOString()}`);
-  
-  // If music connected, trigger fade UP
-  if (timerState.musicConnected) {
-    if (moduleStates.playlist && moduleStates.playlist.volume !== undefined) {
-      const currentVol = moduleStates.playlist.volume;
-      moduleStates.playlist.previousVolume = currentVol;
-      moduleStates.playlist.targetVolume = 75;
-      moduleStates.playlist.fadeStartTime = Date.now();
-      moduleStates.playlist.fadeDirection = 'up';
-      console.log(`[TIMER] Triggering Playlist fade UP: ${currentVol}% → 75%`);
-    }
-    
-    if (moduleStates.spotify && moduleStates.spotify.volume !== undefined) {
-      const currentVol = moduleStates.spotify.volume;
-      moduleStates.spotify.previousVolume = currentVol;
-      moduleStates.spotify.targetVolume = 75;
-      moduleStates.spotify.fadeStartTime = Date.now();
-      moduleStates.spotify.fadeDirection = 'up';
-      console.log(`[TIMER] Triggering Spotify fade UP: ${currentVol}% → 75%`);
-    }
+  timerState.isRunning       = true;
+  timerState.isPaused        = false;
+  timerState.wasSkipped      = false;
+
+  console.log('[TIMER] Started: ' + minutes + ' min');
+
+  if (timerState.musicConnected && moduleStates.spotify) {
+    const currentVol = moduleStates.spotify.volume || 50;
+    timerState._preFadeVolume = currentVol;
+    triggerSpotifyFade(currentVol, 80);
   }
-  
-  const remaining = getTimerRemaining();
-  const endTime = getTimerEndTime();
-  
+
   res.json({
-    duration: timerState.duration,
-    remaining: remaining,
-    endTime: endTime,
-    isRunning: timerState.isRunning,
-    isPaused: timerState.isPaused,
+    duration:  timerState.duration,
+    remaining: getTimerRemaining(),
+    endTime:   getTimerEndTime(),
+    isRunning: true,
+    isPaused:  false,
     wasSkipped: false
   });
 });
 
-app.post('/api/timer/pause', getUserFromSession, (req, res) => {
-  if (!timerState.isRunning) {
-    return res.status(400).json({ error: 'Timer not running' });
-  }
-  
-  if (timerState.isPaused) {
-    return res.status(400).json({ error: 'Timer already paused' });
-  }
-  
+app.post('/api/timer/pause', getUserFromSession, function(req, res) {
+  if (!timerState.isRunning) return res.status(400).json({ error: 'Timer not running' });
+  if (timerState.isPaused)   return res.status(400).json({ error: 'Already paused' });
+
   timerState.pausedRemaining = getTimerRemaining();
-  timerState.pausedAt = Date.now();
-  timerState.isPaused = true;
-  
-  console.log(`[TIMER] Paused at ${timerState.pausedRemaining}s remaining`);
-  
+  timerState.pausedAt        = Date.now();
+  timerState.isPaused        = true;
+
   res.json({
-    duration: timerState.duration,
+    duration:  timerState.duration,
     remaining: timerState.pausedRemaining,
-    endTime: null,
-    isRunning: timerState.isRunning,
-    isPaused: timerState.isPaused,
-    wasSkipped: timerState.wasSkipped
+    endTime:   null,
+    isRunning: true,
+    isPaused:  true,
+    wasSkipped: false
   });
 });
 
-app.post('/api/timer/resume', getUserFromSession, (req, res) => {
-  if (!timerState.isRunning) {
-    return res.status(400).json({ error: 'Timer not running' });
-  }
-  
-  if (!timerState.isPaused) {
-    return res.status(400).json({ error: 'Timer not paused' });
-  }
-  
-  timerState.duration = timerState.pausedRemaining;
+app.post('/api/timer/resume', getUserFromSession, function(req, res) {
+  if (!timerState.isRunning) return res.status(400).json({ error: 'Timer not running' });
+  if (!timerState.isPaused)  return res.status(400).json({ error: 'Not paused' });
+
+  timerState.duration  = timerState.pausedRemaining;
   timerState.startTime = Date.now();
-  timerState.pausedAt = null;
-  timerState.isPaused = false;
-  
-  console.log(`[TIMER] Resumed with ${timerState.duration}s remaining`);
-  console.log(`[TIMER] New end time: ${new Date(getTimerEndTime()).toISOString()}`);
-  
-  const remaining = getTimerRemaining();
-  const endTime = getTimerEndTime();
-  
+  timerState.pausedAt  = null;
+  timerState.isPaused  = false;
+
   res.json({
-    duration: timerState.duration,
-    remaining: remaining,
-    endTime: endTime,
-    isRunning: timerState.isRunning,
-    isPaused: timerState.isPaused,
-    wasSkipped: timerState.wasSkipped
+    duration:  timerState.duration,
+    remaining: getTimerRemaining(),
+    endTime:   getTimerEndTime(),
+    isRunning: true,
+    isPaused:  false,
+    wasSkipped: false
   });
 });
 
-app.post('/api/timer/reset', getUserFromSession, (req, res) => {
+app.post('/api/timer/reset', getUserFromSession, function(req, res) {
   const wasRunning = timerState.isRunning && getTimerRemaining() > 0;
-  
-  timerState.duration = 0;
-  timerState.startTime = null;
-  timerState.pausedAt = null;
-  timerState.pausedRemaining = 0;
-  timerState.isRunning = false;
-  timerState.isPaused = false;
-  timerState.wasSkipped = wasRunning;
-  
-  console.log(`[TIMER] Reset. Was skipped: ${wasRunning}`);
-  
-  // Trigger fade DOWN to restore volume
-  if (timerState.musicConnected) {
-    if (moduleStates.playlist && moduleStates.playlist.previousVolume !== undefined) {
-      const targetVol = moduleStates.playlist.previousVolume;
-      moduleStates.playlist.targetVolume = targetVol;
-      moduleStates.playlist.fadeStartTime = Date.now();
-      moduleStates.playlist.fadeDirection = 'down';
-      console.log(`[TIMER] Triggering Playlist fade DOWN to ${targetVol}%`);
-    }
-    if (moduleStates.spotify && moduleStates.spotify.previousVolume !== undefined) {
-      const targetVol = moduleStates.spotify.previousVolume;
-      moduleStates.spotify.targetVolume = targetVol;
-      moduleStates.spotify.fadeStartTime = Date.now();
-      moduleStates.spotify.fadeDirection = 'down';
-      console.log(`[TIMER] Triggering Spotify fade DOWN to ${targetVol}%`);
-    }
+
+  if (timerState.musicConnected && moduleStates.spotify) {
+    const restoreVol = timerState._preFadeVolume || 50;
+    const currentVol = moduleStates.spotify.volume || 80;
+    triggerSpotifyFade(currentVol, restoreVol);
   }
-  
-  res.json({
-    duration: 0,
-    remaining: 0,
-    endTime: null,
-    isRunning: false,
-    isPaused: false,
-    wasSkipped: wasRunning,
-    language: timerState.language
-  });
+
+  timerState.duration        = 0;
+  timerState.startTime       = null;
+  timerState.pausedAt        = null;
+  timerState.pausedRemaining = 0;
+  timerState.isRunning       = false;
+  timerState.isPaused        = false;
+  timerState.wasSkipped      = wasRunning;
+
+  res.json({ duration: 0, remaining: 0, endTime: null, isRunning: false, isPaused: false, wasSkipped: wasRunning, language: timerState.language });
 });
 
-app.post('/api/timer/language', getUserFromSession, (req, res) => {
-  const { language } = req.body;
-  
-  if (language !== 'de' && language !== 'en') {
-    return res.status(400).json({ error: 'Invalid language' });
-  }
-  
+app.post('/api/timer/language', getUserFromSession, function(req, res) {
+  const language = req.body.language;
+  if (language !== 'de' && language !== 'en') return res.status(400).json({ error: 'Invalid language' });
   timerState.language = language;
-  console.log(`[TIMER] Language changed to: ${language}`);
-  
   res.json({ language: timerState.language });
 });
 
-app.post('/api/timer/music-connect', getUserFromSession, (req, res) => {
-  const { connected } = req.body;
+app.post('/api/timer/music-connect', getUserFromSession, function(req, res) {
+  const connected = req.body.connected;
   timerState.musicConnected = connected;
-  console.log(`[TIMER] Music connection: ${connected ? 'ON' : 'OFF'}`);
+  console.log('[TIMER] Music connection: ' + (connected ? 'ON' : 'OFF'));
   res.json({ musicConnected: timerState.musicConnected });
 });
+
+// Auto-detect natural timer end → restore volume
+setInterval(function() {
+  if (timerState.isRunning && !timerState.isPaused) {
+    const remaining = getTimerRemaining();
+    if (remaining === 0 && timerState.duration > 0) {
+      if (timerState.musicConnected && moduleStates.spotify) {
+        const restoreVol = timerState._preFadeVolume || 50;
+        const currentVol = moduleStates.spotify.volume || 80;
+        if (moduleStates.spotify.targetVolume !== restoreVol) {
+          triggerSpotifyFade(currentVol, restoreVol);
+          console.log('[TIMER] Timer ended, restoring volume to ' + restoreVol + '%');
+        }
+      }
+      timerState.isRunning = false;
+    }
+  }
+}, 500);
   </script>
-  
+
   <!-- ==========================================
        CONTROLLER MODULE CODE
        ========================================== -->
   <script type="text/x-controller-module">
-let timerInterval = null;
-let isUpdating = false;
-let musicModuleAvailable = false;
-let entertainmentModuleAvailable = false;
-let currentMode = 'music';
+var timerInterval   = null;
+var isUpdating      = false;
+var spotifyConnected = false;
+var vidsAvailable   = false;
+var currentMode     = 'music';
 
 async function checkModules() {
   try {
-    const res = await fetch(`${apiUrl}/api/modules/list`);
-    const data = await res.json();
-    
-    musicModuleAvailable = data.modules.some(m => 
-      m.musicModule === true && m.hasControllerUI !== false
-    );
-    
-    entertainmentModuleAvailable = data.modules.some(m => 
-      m.id === 'entertaining-countdown'
-    );
-    
-    await renderControlSection();
-    await syncCurrentMode();
-  } catch (err) {
-    console.error('[TIMER] Error checking modules:', err);
+    var modRes  = await fetch(apiUrl + '/api/modules/list');
+    var modData = await modRes.json();
+    vidsAvailable = modData.modules.some(function(m) { return m.id === 'entertaining-countdown'; });
+
+    var spRes  = await fetch(apiUrl + '/api/spotify/state', { headers: getHeaders() });
+    var spData = await spRes.json();
+    spotifyConnected = spData.connected || false;
+
+    if (!spotifyConnected && vidsAvailable) {
+      currentMode = 'vids';
+    } else if (spotifyConnected) {
+      currentMode = 'music';
+    }
+
+    renderPill();
+  } catch(e) {
+    console.error('[TIMER] checkModules error:', e);
   }
 }
 
-async function syncCurrentMode() {
+function renderPill() {
+  var section = document.getElementById('timer-control-section');
+  if (!section) return;
+
+  var musicDisabled = !spotifyConnected;
+  var vidsDisabled  = !vidsAvailable;
+
+  section.innerHTML =
+    '<style>' +
+      '.pill-wrap {' +
+        'display:flex;align-items:center;justify-content:center;' +
+        'gap:10px;padding:8px 10px;background:#1a1a1a;' +
+        'border-radius:8px;margin-bottom:15px;' +
+      '}' +
+      '.pill-label {' +
+        'font-size:13px;font-weight:bold;transition:color 0.3s;' +
+        'user-select:none;min-width:55px;text-align:center;' +
+      '}' +
+      '.pill-label.active   { color:#fff; cursor:pointer; }' +
+      '.pill-label.inactive { color:#777; cursor:pointer; }' +
+      '.pill-label.disabled { color:#333; cursor:not-allowed; }' +
+      '.pill-track {' +
+        'position:relative;width:56px;height:28px;' +
+        'background:#2a2a2a;border:2px solid #444;' +
+        'border-radius:14px;cursor:pointer;transition:background 0.3s;flex-shrink:0;' +
+      '}' +
+      '.pill-track.all-disabled { opacity:0.3; cursor:not-allowed; }' +
+      '.pill-circle {' +
+        'position:absolute;top:2px;width:20px;height:20px;' +
+        'background:#fff;border-radius:50%;' +
+        'transition:left 0.35s cubic-bezier(0.4,0,0.2,1);' +
+        'box-shadow:0 2px 6px rgba(0,0,0,0.4);' +
+      '}' +
+      '.pill-circle.pos-left   { left:2px; }' +
+      '.pill-circle.pos-center { left:16px; }' +
+      '.pill-circle.pos-right  { left:30px; }' +
+    '</style>' +
+    '<div class="pill-wrap">' +
+      '<span class="pill-label ' + (musicDisabled ? 'disabled' : (currentMode === 'music' ? 'active' : 'inactive')) + '" id="pill-lbl-music">🎵 Musik</span>' +
+      '<div class="pill-track ' + (musicDisabled && vidsDisabled ? 'all-disabled' : '') + '" id="pill-track">' +
+        '<div class="pill-circle ' + (currentMode === 'music' ? 'pos-left' : 'pos-right') + '" id="pill-circle"></div>' +
+      '</div>' +
+      '<span class="pill-label ' + (vidsDisabled ? 'disabled' : (currentMode === 'vids' ? 'active' : 'inactive')) + '" id="pill-lbl-vids">🎬 Vids</span>' +
+    '</div>';
+
+  if (!(musicDisabled && vidsDisabled)) {
+    document.getElementById('pill-track').addEventListener('click', onPillClick);
+  }
+  document.getElementById('pill-lbl-music').addEventListener('click', function() {
+    if (!musicDisabled) trySetMode('music');
+    else bouncePill('pos-left');
+  });
+  document.getElementById('pill-lbl-vids').addEventListener('click', function() {
+    if (!vidsDisabled) trySetMode('vids');
+    else bouncePill('pos-right');
+  });
+}
+
+function onPillClick() {
+  var target = currentMode === 'music' ? 'vids' : 'music';
+  trySetMode(target);
+}
+
+function trySetMode(target) {
+  if (target === 'music' && !spotifyConnected) { bouncePill('pos-left');  return; }
+  if (target === 'vids'  && !vidsAvailable)    { bouncePill('pos-right'); return; }
+  if (target === currentMode) return;
+  currentMode = target;
+  applyMode();
+  renderPill();
+}
+
+function bouncePill(returnPos) {
+  var circle = document.getElementById('pill-circle');
+  if (!circle) return;
+  circle.className = 'pill-circle pos-center';
+  setTimeout(function() {
+    circle.className = 'pill-circle ' + returnPos;
+  }, 380);
+}
+
+async function applyMode() {
   try {
-    if (musicModuleAvailable) {
-      const timerRes = await fetch(`${apiUrl}/api/timer`, { headers: getHeaders() });
-      const timerData = await timerRes.json();
-      if (timerData.musicConnected) {
-        currentMode = 'music';
-      }
-    }
-    
-    if (entertainmentModuleAvailable) {
-      const entertainRes = await fetch(`${apiUrl}/api/entertaining/state`, { headers: getHeaders() });
-      const entertainData = await entertainRes.json();
-      if (entertainData.enabled) {
-        currentMode = 'entertainment';
-      }
-    }
-    
-    await renderControlSection();
-  } catch (err) {
-    console.error('[TIMER] Error syncing mode:', err);
-  }
-}
-
-async function renderControlSection() {
-  const section = document.getElementById('timer-control-section');
-  
-  if (musicModuleAvailable && entertainmentModuleAvailable) {
-    section.innerHTML = `
-      <div class="timer-mode-toggle">
-        <span class="timer-mode-label ${currentMode === 'music' ? 'active' : ''}" id="label-music">🎵 Music</span>
-        <div class="timer-toggle-switch ${currentMode === 'entertainment' ? 'entertainment' : ''}" id="mode-toggle">
-          <div class="timer-toggle-circle"></div>
-        </div>
-        <span class="timer-mode-label ${currentMode === 'entertainment' ? 'active' : ''}" id="label-entertainment">🎬 Entertainment</span>
-      </div>
-    `;
-    
-    document.getElementById('mode-toggle').addEventListener('click', toggleMode);
-    document.getElementById('label-music').addEventListener('click', () => setMode('music'));
-    document.getElementById('label-entertainment').addEventListener('click', () => setMode('entertainment'));
-  }
-  else if (musicModuleAvailable && !entertainmentModuleAvailable) {
-    section.innerHTML = `
-      <div class="timer-music-connect" style="width: 100%; margin-left: 0;">
-        <input type="checkbox" id="timer-music-checkbox">
-        <label for="timer-music-checkbox">🎵 Music</label>
-      </div>
-    `;
-    
-    const checkbox = document.getElementById('timer-music-checkbox');
-    
-    try {
-      const res = await fetch(`${apiUrl}/api/timer`, { headers: getHeaders() });
-      const data = await res.json();
-      checkbox.checked = data.musicConnected || false;
-    } catch (err) {
-      console.error('[TIMER] Error syncing music checkbox:', err);
-    }
-    
-    checkbox.addEventListener('change', async (e) => {
-      try {
-        await fetch(`${apiUrl}/api/timer/music-connect`, {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({ connected: e.target.checked })
-        });
-      } catch (err) {
-        console.error('[TIMER] Music connect error:', err);
-      }
-    });
-  }
-  else if (!musicModuleAvailable && entertainmentModuleAvailable) {
-    section.innerHTML = `
-      <div class="timer-music-connect" style="width: 100%; margin-left: 0;">
-        <input type="checkbox" id="timer-entertainment-checkbox">
-        <label for="timer-entertainment-checkbox">🎬 Entertainment</label>
-      </div>
-    `;
-    
-    const checkbox = document.getElementById('timer-entertainment-checkbox');
-    
-    try {
-      const res = await fetch(`${apiUrl}/api/entertaining/state`, { headers: getHeaders() });
-      const data = await res.json();
-      checkbox.checked = data.enabled || false;
-    } catch (err) {
-      console.error('[TIMER] Error syncing entertainment checkbox:', err);
-    }
-    
-    checkbox.addEventListener('change', async (e) => {
-      try {
-        await fetch(`${apiUrl}/api/entertaining/state`, {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({ enabled: e.target.checked })
-        });
-      } catch (err) {
-        console.error('[TIMER] Entertainment toggle error:', err);
-      }
-    });
-  }
-  else {
-    section.innerHTML = '';
-  }
-}
-
-async function toggleMode() {
-  currentMode = currentMode === 'music' ? 'entertainment' : 'music';
-  await updateMode();
-}
-
-async function setMode(mode) {
-  if (mode !== currentMode) {
-    currentMode = mode;
-    await updateMode();
-  }
-}
-
-async function updateMode() {
-  const toggle = document.getElementById('mode-toggle');
-  const labelMusic = document.getElementById('label-music');
-  const labelEntertainment = document.getElementById('label-entertainment');
-  
-  if (currentMode === 'entertainment') {
-    toggle.classList.add('entertainment');
-    labelMusic.classList.remove('active');
-    labelEntertainment.classList.add('active');
-    
-    try {
-      await fetch(`${apiUrl}/api/entertaining/state`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ enabled: true })
-      });
-      
-      await fetch(`${apiUrl}/api/timer/music-connect`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ connected: false })
-      });
-    } catch (err) {
-      console.error('[TIMER] Mode update error:', err);
-    }
-  } else {
-    toggle.classList.remove('entertainment');
-    labelMusic.classList.add('active');
-    labelEntertainment.classList.remove('active');
-    
-    try {
-      await fetch(`${apiUrl}/api/timer/music-connect`, {
-        method: 'POST',
-        headers: getHeaders(),
+    if (currentMode === 'music') {
+      await fetch(apiUrl + '/api/timer/music-connect', {
+        method: 'POST', headers: getHeaders(),
         body: JSON.stringify({ connected: true })
       });
-      
-      await fetch(`${apiUrl}/api/entertaining/state`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ enabled: false })
+      if (vidsAvailable) {
+        await fetch(apiUrl + '/api/entertaining/state', {
+          method: 'POST', headers: getHeaders(),
+          body: JSON.stringify({ enabled: false })
+        });
+      }
+    } else {
+      await fetch(apiUrl + '/api/timer/music-connect', {
+        method: 'POST', headers: getHeaders(),
+        body: JSON.stringify({ connected: false })
       });
-    } catch (err) {
-      console.error('[TIMER] Mode update error:', err);
+      if (vidsAvailable) {
+        await fetch(apiUrl + '/api/entertaining/state', {
+          method: 'POST', headers: getHeaders(),
+          body: JSON.stringify({ enabled: true })
+        });
+      }
     }
-  }
+  } catch(e) { console.error('[TIMER] applyMode error:', e); }
 }
 
-container.innerHTML = `
-  <style>
-    .timer-preview {
-      background: #1a1a1a;
-      padding: 15px;
-      border-radius: 10px;
-      margin-bottom: 20px;
-      text-align: center;
-    }
-    
-    .timer-preview-time {
-      font-size: 28px;
-      font-weight: bold;
-      margin-bottom: 8px;
-    }
-    
-    .timer-preview-end {
-      font-size: 14px;
-      opacity: 0.7;
-    }
-    
-    .timer-input-group {
-      margin-bottom: 15px;
-    }
-    
-    .timer-input-group label {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 13px;
-      opacity: 0.8;
-    }
-    
-    .timer-input-group input {
-      width: 100%;
-      padding: 10px;
-      background: #1a1a1a;
-      border: 2px solid #3a3a3a;
-      border-radius: 8px;
-      color: white;
-      font-size: 15px;
-      transition: border-color 0.3s;
-    }
-    
-    .timer-input-group input:focus {
-      outline: none;
-      border-color: #00BCD4;
-    }
-    
-    .timer-mode-toggle {
-      margin-bottom: 15px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      padding: 8px 10px;
-      background: #1a1a1a;
-      border-radius: 8px;
-    }
-    
-    .timer-mode-label {
-      font-size: 12px;
-      color: #999;
-      transition: color 0.3s;
-      user-select: none;
-      cursor: pointer;
-    }
-    
-    .timer-mode-label.active {
-      color: white;
-      font-weight: bold;
-    }
-    
-    .timer-toggle-switch {
-      position: relative;
-      width: 50px;
-      height: 24px;
-      background: #3a3a3a;
-      border-radius: 12px;
-      cursor: pointer;
-      transition: background-color 0.3s;
-    }
-    
-    .timer-toggle-circle {
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      width: 20px;
-      height: 20px;
-      background: white;
-      border-radius: 50%;
-      transition: left 0.3s ease;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-    }
-    
-    .timer-toggle-switch.entertainment .timer-toggle-circle {
-      left: 28px;
-    }
-    
-    .timer-music-connect {
-      margin-bottom: 15px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 10px;
-      background: #1a1a1a;
-      border-radius: 8px;
-    }
-    
-    .timer-music-connect input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      cursor: pointer;
-      accent-color: #00BCD4;
-    }
-    
-    .timer-music-connect label {
-      font-size: 12px;
-      cursor: pointer;
-      user-select: none;
-      white-space: nowrap;
-    }
-    
-    .timer-button-group {
-      display: flex;
-      gap: 8px;
-      margin-top: 15px;
-    }
-    
-    .timer-button-group button {
-      flex: 1;
-      padding: 12px;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: bold;
-      cursor: pointer;
-      transition: all 0.3s;
-    }
-    
-    .timer-btn-start {
-      background: #4CAF50;
-      color: white;
-    }
-    
-    .timer-btn-start:hover {
-      background: #45a049;
-    }
-    
-    .timer-btn-pause {
-      background: #FF9800;
-      color: white;
-    }
-    
-    .timer-btn-pause:hover {
-      background: #e68900;
-    }
-    
-    .timer-btn-reset {
-      background: #f44336;
-      color: white;
-    }
-    
-    .timer-btn-reset:hover {
-      background: #da190b;
-    }
-    
-    .hidden {
-      display: none !important;
-    }
-  </style>
-  
-  <div class="timer-preview">
-    <div class="timer-preview-time" id="timer-preview-time">00:00</div>
-    <div class="timer-preview-end" id="timer-preview-end">Resume: --:--</div>
-  </div>
-  
-  <div class="timer-input-group">
-    <label for="timer-time-input">Time in minutes:</label>
-    <input type="number" id="timer-time-input" min="1" placeholder="e.g. 5" value="5">
-  </div>
-  
-  <div id="timer-control-section"></div>
-  
-  <div class="timer-button-group">
-    <button class="timer-btn-start" id="timer-start-btn">▶️ Start</button>
-    <button class="timer-btn-pause hidden" id="timer-pause-btn">⏸️ Pause</button>
-    <button class="timer-btn-reset hidden" id="timer-reset-btn">⏹️ Reset</button>
-  </div>
-`;
+container.innerHTML =
+  '<style>' +
+    '.timer-preview{background:#1a1a1a;padding:15px;border-radius:10px;margin-bottom:20px;text-align:center;}' +
+    '.timer-preview-time{font-size:28px;font-weight:bold;margin-bottom:8px;}' +
+    '.timer-preview-end{font-size:14px;opacity:0.7;}' +
+    '.timer-input-group{margin-bottom:15px;}' +
+    '.timer-input-group label{display:block;margin-bottom:6px;font-size:13px;opacity:0.8;}' +
+    '.timer-input-group input{width:100%;padding:10px;background:#1a1a1a;border:2px solid #3a3a3a;border-radius:8px;color:white;font-size:15px;transition:border-color 0.3s;}' +
+    '.timer-input-group input:focus{outline:none;border-color:#00BCD4;}' +
+    '.timer-button-group{display:flex;gap:8px;margin-top:15px;}' +
+    '.timer-button-group button{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;transition:all 0.3s;}' +
+    '.timer-btn-start{background:#4CAF50;color:white;}' +
+    '.timer-btn-start:hover{background:#45a049;}' +
+    '.timer-btn-pause{background:#FF9800;color:white;}' +
+    '.timer-btn-pause:hover{background:#e68900;}' +
+    '.timer-btn-reset{background:#f44336;color:white;}' +
+    '.timer-btn-reset:hover{background:#da190b;}' +
+    '.hidden{display:none!important;}' +
+  '</style>' +
+  '<div class="timer-preview">' +
+    '<div class="timer-preview-time" id="timer-preview-time">00:00</div>' +
+    '<div class="timer-preview-end"  id="timer-preview-end">Resume: --:--</div>' +
+  '</div>' +
+  '<div class="timer-input-group">' +
+    '<label for="timer-time-input">Time in minutes:</label>' +
+    '<input type="number" id="timer-time-input" min="1" placeholder="e.g. 5" value="5">' +
+  '</div>' +
+  '<div id="timer-control-section"></div>' +
+  '<div class="timer-button-group">' +
+    '<button class="timer-btn-start" id="timer-start-btn">▶️ Start</button>' +
+    '<button class="timer-btn-pause hidden" id="timer-pause-btn">⏸️ Pause</button>' +
+    '<button class="timer-btn-reset hidden" id="timer-reset-btn">⏹️ Reset</button>' +
+  '</div>';
 
-const previewTime = document.getElementById('timer-preview-time');
-const previewEnd = document.getElementById('timer-preview-end');
-const timeInput = document.getElementById('timer-time-input');
-const startBtn = document.getElementById('timer-start-btn');
-const pauseBtn = document.getElementById('timer-pause-btn');
-const resetBtn = document.getElementById('timer-reset-btn');
+var previewTime = document.getElementById('timer-preview-time');
+var previewEnd  = document.getElementById('timer-preview-end');
+var timeInput   = document.getElementById('timer-time-input');
+var startBtn    = document.getElementById('timer-start-btn');
+var pauseBtn    = document.getElementById('timer-pause-btn');
+var resetBtn    = document.getElementById('timer-reset-btn');
 
 async function updateTimerUI() {
   if (isUpdating) return;
-  
   try {
-    const res = await fetch(`${apiUrl}/api/timer`, { headers: getHeaders() });
-    const timer = await res.json();
-    
+    var res   = await fetch(apiUrl + '/api/timer', { headers: getHeaders() });
+    var timer = await res.json();
+
+    // Periodically re-check Spotify
+    var spRes  = await fetch(apiUrl + '/api/spotify/state', { headers: getHeaders() });
+    var spData = await spRes.json();
+    var wasConnected = spotifyConnected;
+    spotifyConnected = spData.connected || false;
+
+    if (wasConnected && !spotifyConnected && currentMode === 'music') {
+      if (vidsAvailable) { currentMode = 'vids'; applyMode(); }
+      renderPill();
+    }
+
     if (timer.isRunning && timer.remaining > 0) {
-      const mins = Math.floor(timer.remaining / 60);
-      const secs = timer.remaining % 60;
-      previewTime.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-      
+      var mins = Math.floor(timer.remaining / 60);
+      var secs = timer.remaining % 60;
+      previewTime.textContent = (mins < 10 ? '0' : '') + mins + ':' + (secs < 10 ? '0' : '') + secs;
       if (timer.endTime && !timer.isPaused) {
-        const endDate = new Date(timer.endTime);
-        const hours = endDate.getHours().toString().padStart(2, '0');
-        const minutes = endDate.getMinutes().toString().padStart(2, '0');
-        previewEnd.textContent = `Resume: ${hours}:${minutes}`;
+        var d = new Date(timer.endTime);
+        previewEnd.textContent = 'Resume: ' + (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
       } else {
         previewEnd.textContent = 'Paused';
       }
-      
       panel.style.borderColor = moduleConfig.activeColor;
       startBtn.classList.add('hidden');
       pauseBtn.classList.remove('hidden');
       resetBtn.classList.remove('hidden');
-      
-      if (timer.isPaused) {
-        pauseBtn.textContent = '▶️ Resume';
-      } else {
-        pauseBtn.textContent = '⏸️ Pause';
-      }
+      pauseBtn.textContent = timer.isPaused ? '▶️ Resume' : '⏸️ Pause';
     } else {
       previewTime.textContent = '00:00';
-      previewEnd.textContent = 'Resume: --:--';
+      previewEnd.textContent  = 'Resume: --:--';
       panel.style.borderColor = moduleConfig.borderColor;
       startBtn.classList.remove('hidden');
       pauseBtn.classList.add('hidden');
       resetBtn.classList.add('hidden');
-      
-      if (timer.musicConnected && !timer.isRunning && timer.remaining === 0) {
-        try {
-          await fetch(`${apiUrl}/api/timer/reset`, {
-            method: 'POST',
-            headers: getHeaders()
-          });
-          console.log('[TIMER] Auto-triggered fade DOWN');
-        } catch (err) {
-          console.error('[TIMER] Auto-restore error:', err);
-        }
-      }
     }
-  } catch (err) {
-    console.error('[TIMER] Update error:', err);
-  }
+  } catch(e) { console.error('[TIMER] updateTimerUI error:', e); }
 }
 
-startBtn.addEventListener('click', async () => {
+startBtn.addEventListener('click', async function() {
   isUpdating = true;
-  const minutes = parseInt(timeInput.value) || 5;
-  
+  var minutes = parseInt(timeInput.value) || 5;
   try {
-    await fetch(`${apiUrl}/api/timer/start`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ minutes })
-    });
-    
+    await fetch(apiUrl + '/api/timer/start', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ minutes: minutes }) });
     await updateTimerUI();
-  } catch (err) {
-    console.error('[TIMER] Start error:', err);
-  } finally {
-    isUpdating = false;
-  }
+  } catch(e) { console.error('[TIMER] Start error:', e); }
+  finally { isUpdating = false; }
 });
 
-pauseBtn.addEventListener('click', async () => {
+pauseBtn.addEventListener('click', async function() {
   isUpdating = true;
-  
   try {
-    const res = await fetch(`${apiUrl}/api/timer`, { headers: getHeaders() });
-    const currentState = await res.json();
-    
-    const endpoint = currentState.isPaused ? '/api/timer/resume' : '/api/timer/pause';
-    
-    await fetch(`${apiUrl}${endpoint}`, {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    
+    var res   = await fetch(apiUrl + '/api/timer', { headers: getHeaders() });
+    var state = await res.json();
+    var ep    = state.isPaused ? '/api/timer/resume' : '/api/timer/pause';
+    await fetch(apiUrl + ep, { method: 'POST', headers: getHeaders() });
     await updateTimerUI();
-  } catch (err) {
-    console.error('[TIMER] Pause/Resume error:', err);
-  } finally {
-    isUpdating = false;
-  }
+  } catch(e) { console.error('[TIMER] Pause error:', e); }
+  finally { isUpdating = false; }
 });
 
-resetBtn.addEventListener('click', async () => {
+resetBtn.addEventListener('click', async function() {
   isUpdating = true;
-  
   try {
-    await fetch(`${apiUrl}/api/timer/reset`, {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    
+    await fetch(apiUrl + '/api/timer/reset', { method: 'POST', headers: getHeaders() });
     await updateTimerUI();
-  } catch (err) {
-    console.error('[TIMER] Reset error:', err);
-  } finally {
-    isUpdating = false;
-  }
+  } catch(e) { console.error('[TIMER] Reset error:', e); }
+  finally { isUpdating = false; }
 });
 
+checkModules();
 timerInterval = setInterval(updateTimerUI, 1000);
 updateTimerUI();
-checkModules();
 
 return {
-  destroy: function() {
-    if (timerInterval) {
-      clearInterval(timerInterval);
-    }
-  }
+  destroy: function() { if (timerInterval) clearInterval(timerInterval); }
 };
   </script>
-  
+
   <!-- ==========================================
        OBS OVERLAY STYLES
        ========================================== -->
@@ -802,20 +480,13 @@ return {
       font-family: 'StreamFont';
       src: url('/fonts/font.ttf') format('truetype');
     }
-    
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       background: transparent;
       font-family: 'StreamFont', Arial, sans-serif;
       color: white;
       overflow: hidden;
     }
-    
     .countdown-container {
       position: fixed;
       display: flex;
@@ -826,157 +497,64 @@ return {
       transition: top 2s linear, left 2s linear, transform 2s linear;
       z-index: 10;
     }
-    
-    .countdown-container.large {
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-    }
-    
-    .countdown-container.small {
-      top: auto;
-      bottom: 50px;
-      left: 50px;
-      transform: translate(0, 0);
-    }
-    
+    .countdown-container.large { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+    .countdown-container.small { top: auto; bottom: 50px; left: 50px; transform: translate(0,0); }
     .countdown-time {
       font-weight: bold;
-      text-shadow: 
-        -2px -2px 0 #000,
-        2px -2px 0 #000,
-        -2px 2px 0 #000,
-        2px 2px 0 #000,
-        0 0 20px rgba(0, 0, 0, 0.8);
+      text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 20px rgba(0,0,0,0.8);
       margin-bottom: 20px;
       transition: font-size 2s ease-in-out, margin-bottom 2s ease-in-out;
     }
-    
-    .countdown-container.large .countdown-time {
-      font-size: 120px;
-      margin-bottom: 20px;
-    }
-    
-    .countdown-container.small .countdown-time {
-      font-size: 35px;
-      margin-bottom: 8px;
-    }
-    
+    .countdown-container.large .countdown-time { font-size: 120px; margin-bottom: 20px; }
+    .countdown-container.small .countdown-time { font-size: 35px;  margin-bottom: 8px;  }
     .countdown-bar {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255,255,255,0.2);
       border-radius: 10px;
       overflow: hidden;
       margin: 0 auto 20px;
       transition: width 2s ease-in-out, height 2s ease-in-out, margin 2s ease-in-out;
     }
-    
-    .countdown-container.large .countdown-bar {
-      width: 600px;
-      height: 20px;
-      margin-bottom: 20px;
-    }
-    
-    .countdown-container.small .countdown-bar {
-      width: 180px;
-      height: 8px;
-      margin-bottom: 8px;
-    }
-    
+    .countdown-container.large .countdown-bar { width: 600px; height: 20px; margin-bottom: 20px; }
+    .countdown-container.small .countdown-bar { width: 180px; height: 8px;  margin-bottom: 8px;  }
     .countdown-bar-fill {
       height: 100%;
       background: linear-gradient(90deg, #00BCD4, #00E5FF);
       transition: width 0.5s linear;
       border-radius: 10px;
     }
-    
-    .countdown-end {
-      opacity: 0.8;
-      transition: font-size 2s ease-in-out;
-    }
-    
-    .countdown-container.large .countdown-end {
-      font-size: 24px;
-    }
-    
-    .countdown-container.small .countdown-end {
-      font-size: 12px;
-    }
-    
+    .countdown-end { opacity: 0.8; transition: font-size 2s ease-in-out; }
+    .countdown-container.large .countdown-end { font-size: 24px; }
+    .countdown-container.small .countdown-end { font-size: 12px; }
     .countdown-message {
-      font-size: 72px;
-      color: white;
-      font-weight: bold;
-      text-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+      font-size: 72px; color: white; font-weight: bold;
+      text-shadow: 0 0 20px rgba(0,0,0,0.8);
       margin-bottom: 20px;
       animation: pulse-white 1.5s ease-in-out infinite;
     }
-    
-    .countdown-message.stop-pulse {
-      animation: none;
-      opacity: 1;
-    }
-    
+    .countdown-message.stop-pulse { animation: none; opacity: 1; }
     .countdown-skipped {
-      font-size: 24px;
-      color: #FF5722;
-      font-weight: bold;
+      font-size: 24px; color: #FF5722; font-weight: bold;
       -webkit-text-stroke: 2px white;
-      text-stroke: 2px white;
-      paint-order: stroke fill;
       animation: pulse-red 1.5s ease-in-out infinite;
     }
-    
-    .countdown-skipped.stop-pulse {
-      animation: none;
-      opacity: 1;
-    }
-    
-    @keyframes pulse-white {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
-    }
-    
-    @keyframes pulse-red {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.6; }
-    }
-    
-    .hidden {
-      display: none !important;
-    }
-    
-    /* Entertainment Video Player */
+    .countdown-skipped.stop-pulse { animation: none; opacity: 1; }
+    @keyframes pulse-white { 0%,100%{opacity:1} 50%{opacity:0.5} }
+    @keyframes pulse-red   { 0%,100%{opacity:1} 50%{opacity:0.6} }
+    .hidden { display: none !important; }
     #entertainment-video {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: black;
-      z-index: 5;
-      opacity: 0;
-      transition: opacity 0s;
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      object-fit: contain; background: black; z-index: 5;
+      opacity: 0; transition: opacity 0s;
     }
-    
-    #entertainment-video.fade-in {
-      transition: opacity 2s ease-in-out;
-      opacity: 1;
-    }
-    
-    #entertainment-video.fade-out {
-      transition: opacity 2s ease-in-out;
-      opacity: 0;
-    }
+    #entertainment-video.fade-in  { transition: opacity 2s ease-in-out; opacity: 1; }
+    #entertainment-video.fade-out { transition: opacity 2s ease-in-out; opacity: 0; }
   </style>
 </head>
 <body>
-  <!-- Entertainment Video Player -->
   <video id="entertainment-video" class="hidden"></video>
-  
-  <!-- Countdown Display -->
+
   <div class="countdown-container large" id="countdownContainer">
-    <div style="text-align: center;">
+    <div style="text-align:center;">
       <div class="countdown-time" id="countdownTime">00:00</div>
       <div class="countdown-message hidden" id="countdownMessage">Stream continues shortly</div>
       <div class="countdown-bar">
@@ -989,524 +567,236 @@ return {
 
   <script>
     window.API_URL = window.location.origin;
-    
-    // DOM Elements
+
     const countdownContainer = document.getElementById('countdownContainer');
-    const timeEl = document.getElementById('countdownTime');
-    const barEl = document.getElementById('countdownBar');
-    const endEl = document.getElementById('countdownEnd');
+    const timeEl    = document.getElementById('countdownTime');
+    const barEl     = document.getElementById('countdownBar');
+    const endEl     = document.getElementById('countdownEnd');
     const messageEl = document.getElementById('countdownMessage');
     const skippedEl = document.getElementById('countdownSkipped');
-    const videoEl = document.getElementById('entertainment-video');
-    
-    // State
+    const videoEl   = document.getElementById('entertainment-video');
+
     const texts = {
-      de: {
-        around: 'Ungefähr um',
-        clock: 'Uhr',
-        skipped: 'Pause wurde übersprungen',
-        starting: 'Stream setzt gleich fort'
-      },
-      en: {
-        around: 'Around',
-        clock: "",
-        skipped: 'Break was skipped',
-        starting: 'Stream continues shortly'
-      }
+      de: { around: 'Ungefähr um', clock: 'Uhr', skipped: 'Pause wurde übersprungen', starting: 'Stream setzt gleich fort' },
+      en: { around: 'Around',      clock: '',     skipped: 'Break was skipped',        starting: 'Stream continues shortly' }
     };
-    
-    let currentLang = 'en';
-    let messageShownAt = null;
-    let skippedShownAt = null;
+
+    let currentLang          = 'en';
+    let messageShownAt       = null;
+    let skippedShownAt       = null;
     let entertainmentEnabled = false;
-    let lastTimerRemaining = 0;
-    let currentTimerState = null;
-    
-    // Entertainment Variables
-    let videoDurations = new Map();
-    let availableVideos = [];
-    let currentPlaylist = [];
+    let lastTimerRemaining   = 0;
+    let currentTimerState    = null;
+
+    let videoDurations    = new Map();
+    let availableVideos   = [];
+    let currentPlaylist   = [];
     let currentVideoIndex = 0;
-    let entertainmentActive = false;
-    let timerStartTime = 0;
-    let videoTransitioning = false;
-    
-    // Timer Control API
+    let entertainmentActive   = false;
+    let timerStartTime        = 0;
+    let videoTransitioning    = false;
+
     window.entertainmentTimerControl = {
-      makeTimerLarge: function() {
-        countdownContainer.classList.remove('small');
-        countdownContainer.classList.add('large');
-      },
-      makeTimerSmall: function() {
-        countdownContainer.classList.remove('large');
-        countdownContainer.classList.add('small');
-      }
+      makeTimerLarge: function() { countdownContainer.classList.remove('small'); countdownContainer.classList.add('large'); },
+      makeTimerSmall: function() { countdownContainer.classList.remove('large'); countdownContainer.classList.add('small'); }
     };
-    
-    // Check if Entertainment module exists
+
     async function checkEntertainmentModule() {
-      try {
-        const res = await fetch(`${window.API_URL}/api/entertaining/state`);
-        return res.ok;
-      } catch (err) {
-        return false;
-      }
+      try { const r = await fetch(window.API_URL + '/api/entertaining/state'); return r.ok; }
+      catch(e) { return false; }
     }
-    
-    // Scan all videos and get durations
+
     async function scanAllVideos() {
       try {
-        console.log('[ENTERTAIN] Scanning videos...');
-        const res = await fetch(`${window.API_URL}/api/entertaining/videos`);
+        const res  = await fetch(window.API_URL + '/api/entertaining/videos');
         const data = await res.json();
         availableVideos = data.videos || [];
-        
         videoDurations.clear();
-        
-        for (const video of availableVideos) {
-          try {
-            const duration = await getVideoDuration(video.path);
-            videoDurations.set(video.path, duration);
-            console.log(`[ENTERTAIN] Loaded: ${video.name} (${Math.round(duration)}s)`);
-          } catch (err) {
-            console.error(`[ENTERTAIN] Error loading ${video.name}:`, err);
-          }
+        for (const v of availableVideos) {
+          try { videoDurations.set(v.path, await getVideoDuration(v.path)); }
+          catch(e) {}
         }
-        
-        console.log(`[ENTERTAIN] Scan complete! ${videoDurations.size} videos ready`);
-      } catch (err) {
-        console.error('[ENTERTAIN] Scan error:', err);
-      }
+      } catch(e) {}
     }
-    
-    // Get video duration
-    function getVideoDuration(videoPath) {
-      return new Promise((resolve, reject) => {
-        const video = document.createElement('video');
-        video.preload = 'metadata';
-        
-        video.addEventListener('loadedmetadata', () => {
-          resolve(video.duration);
-          video.remove();
-        });
-        
-        video.addEventListener('error', () => {
-          reject(new Error('Failed to load video metadata'));
-          video.remove();
-        });
-        
-        video.src = videoPath;
+
+    function getVideoDuration(path) {
+      return new Promise((res, rej) => {
+        const v = document.createElement('video');
+        v.preload = 'metadata';
+        v.addEventListener('loadedmetadata', () => { res(v.duration); v.remove(); });
+        v.addEventListener('error', () => { rej(new Error('failed')); v.remove(); });
+        v.src = path;
       });
     }
-    
-    // Find best video combination using knapsack algorithm
+
     function findBestVideoCombination(targetTime, videos) {
-      if (videos.length === 0) return [];
-      
-      const n = videos.length;
-      const dp = Array(Math.ceil(targetTime) + 1).fill(0);
-      const selected = Array(Math.ceil(targetTime) + 1).fill().map(() => []);
-      
-      for (let i = 0; i < n; i++) {
-        const duration = Math.floor(videos[i].duration);
-        
-        for (let t = Math.ceil(targetTime); t >= duration; t--) {
-          const newValue = dp[t - duration] + duration;
-          if (newValue > dp[t]) {
-            dp[t] = newValue;
-            selected[t] = [...selected[t - duration], videos[i]];
-          }
+      if (!videos.length) return [];
+      const dp = Array(Math.ceil(targetTime)+1).fill(0);
+      const sel = Array(Math.ceil(targetTime)+1).fill(null).map(()=>[]);
+      for (const vid of videos) {
+        const d = Math.floor(vid.duration);
+        for (let t = Math.ceil(targetTime); t >= d; t--) {
+          if (dp[t-d]+d > dp[t]) { dp[t]=dp[t-d]+d; sel[t]=[...sel[t-d],vid]; }
         }
       }
-      
-      return selected[Math.ceil(targetTime)] || [];
+      return sel[Math.ceil(targetTime)] || [];
     }
-    
-    // Create playlist for timer duration
-    function createPlaylist(timerDuration) {
-      const START_BUFFER = 5;  // 5 seconds at start
-      const END_BUFFER = 10;   // 10 seconds at end
-      const TRANSITION_TIME = 4; // 2s fade out + 2s pause
-      
-      let availableTime = timerDuration - START_BUFFER - END_BUFFER;
-      
-      const videoList = Array.from(videoDurations.entries()).map(([path, duration]) => ({
-        path,
-        duration,
-        name: availableVideos.find(v => v.path === path)?.name || path
-      }));
-      
-      const playlist = [];
-      const usedVideos = new Set();
-      
-      while (availableTime > 0 && usedVideos.size < videoList.length) {
-        const unusedVideos = videoList.filter(v => !usedVideos.has(v.path));
-        if (unusedVideos.length === 0) break;
-        
-        const combination = findBestVideoCombination(availableTime, unusedVideos);
-        
-        if (combination.length === 0) {
-          const shortest = unusedVideos.reduce((min, v) => 
-            v.duration < min.duration ? v : min
-          );
-          
-          if (shortest.duration <= availableTime) {
-            playlist.push(shortest);
-            usedVideos.add(shortest.path);
-            availableTime -= (shortest.duration + TRANSITION_TIME);
-          } else {
-            break;
-          }
+
+    function createPlaylist(dur) {
+      const START=5, END=10, TRANS=4;
+      let avail = dur - START - END;
+      const vids = Array.from(videoDurations.entries()).map(([p,d])=>({ path:p, duration:d, name: (availableVideos.find(v=>v.path===p)||{}).name||p }));
+      const pl=[], used=new Set();
+      while (avail>0 && used.size<vids.length) {
+        const unused = vids.filter(v=>!used.has(v.path));
+        if (!unused.length) break;
+        const combo = findBestVideoCombination(avail, unused);
+        if (!combo.length) {
+          const sh = unused.reduce((m,v)=>v.duration<m.duration?v:m);
+          if (sh.duration<=avail) { pl.push(sh); used.add(sh.path); avail-=(sh.duration+TRANS); }
+          else break;
         } else {
-          for (const video of combination) {
-            playlist.push(video);
-            usedVideos.add(video.path);
-            availableTime -= TRANSITION_TIME;
-          }
-          availableTime -= combination.reduce((sum, v) => sum + v.duration, 0);
+          for (const v of combo) { pl.push(v); used.add(v.path); avail-=TRANS; }
+          avail -= combo.reduce((s,v)=>s+v.duration,0);
         }
       }
-      
-      console.log(`[ENTERTAIN] Playlist: ${playlist.length} videos for ${timerDuration}s timer`);
-      return playlist;
+      return pl;
     }
-    
-    // Play video with fade in (last 2 seconds)
-    async function playVideo(videoPath) {
-      return new Promise((resolve) => {
-        console.log('[ENTERTAIN] Loading video:', videoPath);
-        videoEl.src = videoPath;
-        videoEl.classList.remove('hidden');
-        videoEl.classList.remove('fade-out');
+
+    async function playVideo(path) {
+      return new Promise(resolve => {
+        videoEl.src = path;
+        videoEl.classList.remove('hidden','fade-out');
         videoEl.currentTime = 0;
-        
-        let fadeOutTriggered = false;
-        
-        // Start playing immediately (no opacity)
-        videoEl.play().catch(err => {
-          console.error('[ENTERTAIN] Play error:', err);
-          resolve();
-        });
-        
-        // Fade in over 2 seconds
-        setTimeout(() => {
-          videoEl.classList.add('fade-in');
-        }, 50);
-        
-        // Monitor for last 2 seconds to fade out
-        const checkTime = setInterval(() => {
-          if (videoEl.paused || videoEl.ended) {
-            clearInterval(checkTime);
-            return;
-          }
-          
-          const remaining = videoEl.duration - videoEl.currentTime;
-          
-          if (remaining <= 2 && !fadeOutTriggered) {
-            fadeOutTriggered = true;
-            console.log('[ENTERTAIN] Video ending in 2s, fading out...');
+        let fadeOutDone = false;
+        videoEl.play().catch(()=>resolve());
+        setTimeout(()=>videoEl.classList.add('fade-in'), 50);
+        const chk = setInterval(()=>{
+          if (videoEl.paused||videoEl.ended) { clearInterval(chk); return; }
+          const rem = videoEl.duration - videoEl.currentTime;
+          if (rem<=2 && !fadeOutDone) {
+            fadeOutDone=true;
             videoEl.classList.remove('fade-in');
             videoEl.classList.add('fade-out');
-            
-            // Make timer large during fade out
             window.entertainmentTimerControl.makeTimerLarge();
           }
-        }, 100);
-        
-        videoEl.onended = () => {
-          console.log('[ENTERTAIN] Video ended');
-          clearInterval(checkTime);
-          videoEl.classList.remove('fade-in');
-          videoEl.classList.remove('fade-out');
-          resolve();
-        };
-        
-        videoEl.onerror = () => {
-          console.error('[ENTERTAIN] Video error');
-          clearInterval(checkTime);
-          resolve();
-        };
+        },100);
+        videoEl.onended = ()=>{ clearInterval(chk); videoEl.classList.remove('fade-in','fade-out'); resolve(); };
+        videoEl.onerror = ()=>{ clearInterval(chk); resolve(); };
       });
     }
-    
-    // Stop video immediately
+
     async function stopVideo() {
-      return new Promise((resolve) => {
+      return new Promise(resolve=>{
         videoEl.classList.remove('fade-in');
         videoEl.classList.add('fade-out');
-        
-        setTimeout(() => {
-          videoEl.pause();
-          videoEl.src = '';
-          videoEl.classList.remove('fade-out');
-          videoEl.classList.add('hidden');
-          resolve();
-        }, 2000);
+        setTimeout(()=>{ videoEl.pause(); videoEl.src=''; videoEl.classList.remove('fade-out'); videoEl.classList.add('hidden'); resolve(); },2000);
       });
     }
-    
-    // Entertainment Loop
+
     async function entertainmentLoop(timer) {
-      if (!entertainmentEnabled || !timer.isRunning) {
-        if (entertainmentActive) {
-          await reset();
-        }
-        return;
+      if (!entertainmentEnabled||!timer.isRunning) { if(entertainmentActive) await resetEnt(); return; }
+      if (!entertainmentActive && timer.remaining===timer.duration) {
+        entertainmentActive=true; timerStartTime=Date.now();
+        currentPlaylist=createPlaylist(timer.duration); currentVideoIndex=0;
+        window.entertainmentTimerControl.makeTimerLarge(); return;
       }
-      
-      // Timer just started - wait 5 seconds
-      if (!entertainmentActive && timer.remaining === timer.duration) {
-        console.log('[ENTERTAIN] Starting... waiting 5 seconds');
-        entertainmentActive = true;
-        timerStartTime = Date.now();
-        currentPlaylist = createPlaylist(timer.duration);
-        currentVideoIndex = 0;
-        
-        // Show timer large for 5 seconds
-        window.entertainmentTimerControl.makeTimerLarge();
-        return;
+      const elapsed=Math.floor((Date.now()-timerStartTime)/1000);
+      if (entertainmentActive&&elapsed>=5&&currentVideoIndex===0&&videoEl.classList.contains('hidden')) {
+        if (currentPlaylist.length>0) await playNextVideo(); return;
       }
-      
-      // After 5 seconds, start first video
-      const elapsed = Math.floor((Date.now() - timerStartTime) / 1000);
-      if (entertainmentActive && elapsed >= 5 && currentVideoIndex === 0 && videoEl.classList.contains('hidden')) {
-        console.log('[ENTERTAIN] 5 seconds elapsed, starting first video');
-        if (currentPlaylist.length > 0) {
-          await playNextVideo();
-        }
-        return;
+      if (entertainmentActive&&!videoTransitioning&&videoEl.ended&&currentVideoIndex<currentPlaylist.length) {
+        if (timer.remaining>15) await playNextVideo();
       }
-      
-      // Check if video ended naturally and play next
-      if (entertainmentActive && !videoTransitioning && videoEl.ended && currentVideoIndex < currentPlaylist.length) {
-        const remaining = timer.remaining;
-        
-        if (remaining > 15) {
-          console.log('[ENTERTAIN] Video ended naturally, playing next');
-          await playNextVideo();
-        }
-      }
-      
-      // Last 10 seconds - show timer large
-      if (entertainmentActive && timer.remaining <= 10 && timer.remaining > 0) {
-        if (!videoEl.classList.contains('hidden') && !videoEl.classList.contains('fade-out')) {
-          console.log('[ENTERTAIN] Last 10 seconds, stopping video');
-          await stopVideo();
-        }
+      if (entertainmentActive&&timer.remaining<=10&&timer.remaining>0) {
+        if (!videoEl.classList.contains('hidden')&&!videoEl.classList.contains('fade-out')) await stopVideo();
         window.entertainmentTimerControl.makeTimerLarge();
       }
     }
-    
-    // Play next video in playlist
+
     async function playNextVideo() {
-      if (currentVideoIndex >= currentPlaylist.length) {
-        console.log('[ENTERTAIN] No more videos in playlist');
-        return;
-      }
-      
-      if (videoTransitioning) {
-        console.log('[ENTERTAIN] Already transitioning, skipping');
-        return;
-      }
-      
-      videoTransitioning = true;
-      
-      const video = currentPlaylist[currentVideoIndex];
-      console.log(`[ENTERTAIN] Playing video ${currentVideoIndex + 1}/${currentPlaylist.length}: ${video.name}`);
-      
-      // Stop current video if playing
-      if (!videoEl.classList.contains('hidden')) {
-        console.log('[ENTERTAIN] Stopping current video');
-        await stopVideo();
-        // Timer is already large from fade-out, wait 2 seconds
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-      
-      // Increment index BEFORE playing to prevent duplicate plays
+      if (currentVideoIndex>=currentPlaylist.length||videoTransitioning) return;
+      videoTransitioning=true;
+      const vid=currentPlaylist[currentVideoIndex];
+      if (!videoEl.classList.contains('hidden')) { await stopVideo(); await new Promise(r=>setTimeout(r,2000)); }
       currentVideoIndex++;
-      
-      // Make timer small and start video with fade-in (2s)
       window.entertainmentTimerControl.makeTimerSmall();
-      await playVideo(video.path);
-      
-      videoTransitioning = false;
-      console.log('[ENTERTAIN] Video finished playing');
+      await playVideo(vid.path);
+      videoTransitioning=false;
     }
-    
-    // Reset entertainment state
-    async function reset() {
-      console.log('[ENTERTAIN] Reset');
-      entertainmentActive = false;
-      currentPlaylist = [];
-      currentVideoIndex = 0;
-      videoTransitioning = false;
-      
-      if (!videoEl.classList.contains('hidden')) {
-        await stopVideo();
-      }
-      
+
+    async function resetEnt() {
+      entertainmentActive=false; currentPlaylist=[]; currentVideoIndex=0; videoTransitioning=false;
+      if (!videoEl.classList.contains('hidden')) await stopVideo();
       window.entertainmentTimerControl.makeTimerLarge();
     }
-    
-    // Update Timer Display
+
     function updateTimerDisplay(timer) {
-      const mins = Math.floor(timer.remaining / 60);
-      const secs = timer.remaining % 60;
-      timeEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-      
-      const percent = (timer.remaining / timer.duration) * 100;
-      barEl.style.width = `${percent}%`;
-      
-      if (timer.endTime && !timer.isPaused) {
-        const date = new Date(timer.endTime);
-        const hours = date.getHours().toString().padStart(2, '0');
-        const minutes = date.getMinutes().toString().padStart(2, '0');
-        endEl.textContent = `${texts[currentLang].around} ${hours}:${minutes} ${texts[currentLang].clock}`;
-      } else if (timer.isPaused) {
-        endEl.textContent = 'Paused';
-      } else {
-        endEl.textContent = 'Around --:--';
-      }
+      const mins=Math.floor(timer.remaining/60), secs=timer.remaining%60;
+      timeEl.textContent=(mins<10?'0':'')+mins+':'+(secs<10?'0':'')+secs;
+      barEl.style.width=((timer.remaining/timer.duration)*100)+'%';
+      if (timer.endTime&&!timer.isPaused) {
+        const d=new Date(timer.endTime);
+        endEl.textContent=texts[currentLang].around+' '+(d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes()+' '+texts[currentLang].clock;
+      } else if (timer.isPaused) { endEl.textContent='Paused'; }
+      else { endEl.textContent='Around --:--'; }
     }
-    
-    // Normal Countdown Update
+
     async function updateCountdown() {
       try {
-        const res = await fetch(`${window.API_URL}/api/timer/public`);
+        const res   = await fetch(window.API_URL + '/api/timer/public');
         const timer = await res.json();
-        
-        currentLang = timer.language || 'en';
-        
-        // Prevent glitch: Only update timer state if it actually changed
-        const stateChanged = !currentTimerState || 
-                            currentTimerState.isRunning !== timer.isRunning ||
-                            currentTimerState.isPaused !== timer.isPaused ||
-                            Math.abs(currentTimerState.remaining - timer.remaining) > 2;
-        
-        currentTimerState = timer;
-        
-        // Run entertainment loop if enabled
-        if (entertainmentEnabled) {
-          await entertainmentLoop(timer);
-        }
-        
-        // Update timer display
-        if (timer.isRunning && timer.remaining > 0) {
+        currentLang = timer.language||'en';
+        const changed = !currentTimerState||currentTimerState.isRunning!==timer.isRunning||currentTimerState.isPaused!==timer.isPaused||Math.abs(currentTimerState.remaining-timer.remaining)>2;
+        currentTimerState=timer;
+        if (entertainmentEnabled) await entertainmentLoop(timer);
+        if (timer.isRunning&&timer.remaining>0) {
           updateTimerDisplay(timer);
-          
-          timeEl.classList.remove('hidden');
-          endEl.classList.remove('hidden');
-          messageEl.classList.add('hidden');
-          skippedEl.classList.add('hidden');
-          messageShownAt = null;
-          skippedShownAt = null;
+          timeEl.classList.remove('hidden'); endEl.classList.remove('hidden');
+          messageEl.classList.add('hidden'); skippedEl.classList.add('hidden');
+          messageShownAt=null; skippedShownAt=null;
         } else {
-          timeEl.classList.add('hidden');
-          barEl.style.width = '0%';
-          
+          timeEl.classList.add('hidden'); barEl.style.width='0%';
           if (timer.wasSkipped) {
-            messageEl.textContent = texts[currentLang].starting;
-            messageEl.classList.remove('hidden');
-            
-            if (messageShownAt === null) {
-              messageShownAt = Date.now();
-            }
-            
-            const messageElapsed = Date.now() - messageShownAt;
-            if (messageElapsed > 5000) {
-              messageEl.classList.add('stop-pulse');
-            } else {
-              messageEl.classList.remove('stop-pulse');
-            }
-            
-            skippedEl.textContent = texts[currentLang].skipped;
-            skippedEl.classList.remove('hidden');
+            messageEl.textContent=texts[currentLang].starting; messageEl.classList.remove('hidden');
+            if (!messageShownAt) messageShownAt=Date.now();
+            if (Date.now()-messageShownAt>5000) messageEl.classList.add('stop-pulse'); else messageEl.classList.remove('stop-pulse');
+            skippedEl.textContent=texts[currentLang].skipped; skippedEl.classList.remove('hidden');
+            if (!skippedShownAt) skippedShownAt=Date.now();
+            if (Date.now()-skippedShownAt>5000) skippedEl.classList.add('stop-pulse'); else skippedEl.classList.remove('stop-pulse');
             endEl.classList.add('hidden');
-            
-            if (skippedShownAt === null) {
-              skippedShownAt = Date.now();
-            }
-            
-            const skippedElapsed = Date.now() - skippedShownAt;
-            if (skippedElapsed > 5000) {
-              skippedEl.classList.add('stop-pulse');
-            } else {
-              skippedEl.classList.remove('stop-pulse');
-            }
           } else {
-            messageEl.textContent = texts[currentLang].starting;
-            messageEl.classList.remove('hidden');
-            
-            if (messageShownAt === null) {
-              messageShownAt = Date.now();
-            }
-            
-            const messageElapsed = Date.now() - messageShownAt;
-            if (messageElapsed > 5000) {
-              messageEl.classList.add('stop-pulse');
-            } else {
-              messageEl.classList.remove('stop-pulse');
-            }
-            
-            skippedEl.classList.add('hidden');
-            endEl.classList.add('hidden');
+            messageEl.textContent=texts[currentLang].starting; messageEl.classList.remove('hidden');
+            if (!messageShownAt) messageShownAt=Date.now();
+            if (Date.now()-messageShownAt>5000) messageEl.classList.add('stop-pulse'); else messageEl.classList.remove('stop-pulse');
+            skippedEl.classList.add('hidden'); endEl.classList.add('hidden');
           }
         }
-        
-        // Detect reset (timer restarted) - only if state changed significantly
-        if (stateChanged && lastTimerRemaining > timer.remaining + 5 && entertainmentEnabled) {
-          console.log('[ENTERTAIN] Reset detected');
-          await reset();
-        }
-        lastTimerRemaining = timer.remaining;
-        
-      } catch (err) {
-        console.error('[COUNTDOWN] Update error:', err);
-      }
+        if (changed&&lastTimerRemaining>timer.remaining+5&&entertainmentEnabled) await resetEnt();
+        lastTimerRemaining=timer.remaining;
+      } catch(e) { console.error('[COUNTDOWN] error:', e); }
     }
-    
-    // Check Entertainment Status
+
     async function checkEntertainmentStatus() {
       try {
-        const res = await fetch(`${window.API_URL}/api/entertaining/state`);
+        const res=await fetch(window.API_URL+'/api/entertaining/state');
         if (res.ok) {
-          const data = await res.json();
-          const wasEnabled = entertainmentEnabled;
-          entertainmentEnabled = data.enabled || false;
-          
-          // Entertainment just activated
-          if (entertainmentEnabled && !wasEnabled) {
-            console.log('[ENTERTAIN] Entertainment activated');
-            await scanAllVideos();
-          }
-          
-          // Entertainment just deactivated
-          if (!entertainmentEnabled && wasEnabled) {
-            console.log('[ENTERTAIN] Entertainment deactivated');
-            await reset();
-          }
+          const data=await res.json();
+          const was=entertainmentEnabled;
+          entertainmentEnabled=data.enabled||false;
+          if (entertainmentEnabled&&!was) await scanAllVideos();
+          if (!entertainmentEnabled&&was) await resetEnt();
         }
-      } catch (err) {
-        entertainmentEnabled = false;
-      }
+      } catch(e) { entertainmentEnabled=false; }
     }
-    
-    // Initialize
+
     async function initialize() {
-      const hasEntertainment = await checkEntertainmentModule();
-      
-      if (hasEntertainment) {
-        console.log('[COUNTDOWN] Entertainment module detected');
-        await scanAllVideos();
-        setInterval(checkEntertainmentStatus, 1000);
-      } else {
-        console.log('[COUNTDOWN] Running in normal mode (no entertainment)');
-      }
-      
+      const hasEnt=await checkEntertainmentModule();
+      if (hasEnt) { await scanAllVideos(); setInterval(checkEntertainmentStatus,1000); }
       setInterval(updateCountdown, 100);
       updateCountdown();
     }
-    
+
     initialize();
   </script>
 </body>
