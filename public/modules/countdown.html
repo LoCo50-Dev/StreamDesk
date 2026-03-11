@@ -261,7 +261,7 @@ function renderPill() {
     '<style>' +
       '.mode-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#1a1a1a;border-radius:8px;margin-bottom:15px;}' +
       '.pill-wrap{display:flex;align-items:center;gap:8px;flex:1;}' +
-      '.pill-label{font-size:13px;font-weight:bold;transition:color 0.3s;user-select:none;min-width:50px;text-align:center;}' +
+      '.pill-label{font-size:13px;font-weight:bold;transition:color 0.3s;user-select:none;min-width:28px;text-align:center;}' +
       '.pill-label.active{color:#fff;cursor:pointer;}' +
       '.pill-label.inactive{color:#777;cursor:pointer;}' +
       '.pill-label.disabled{color:#333;cursor:not-allowed;}' +
@@ -278,16 +278,15 @@ function renderPill() {
     '</style>' +
     '<div class="mode-row">' +
       '<div class="pill-wrap">' +
-        '<span class="pill-label ' + (musicDisabled ? 'disabled' : (currentMode==='music' ? 'active' : 'inactive')) + '" id="pill-lbl-music">🎵 Musik</span>' +
+        '<span class="pill-label ' + (musicDisabled ? 'disabled' : (currentMode==='music' ? 'active' : 'inactive')) + '" id="pill-lbl-music">🎵</span>' +
         '<div class="pill-track' + (bothDisabled ? ' all-disabled' : '') + '" id="pill-track">' +
           '<div class="pill-circle ' + (currentMode==='music' ? 'pos-left' : 'pos-right') + '" id="pill-circle"></div>' +
         '</div>' +
-        '<span class="pill-label ' + (vidsDisabled ? 'disabled' : (currentMode==='vids' ? 'active' : 'inactive')) + '" id="pill-lbl-vids">🎬 Vids</span>' +
+        '<span class="pill-label ' + (vidsDisabled ? 'disabled' : (currentMode==='vids' ? 'active' : 'inactive')) + '" id="pill-lbl-vids">🎥</span>' +
       '</div>' +
       '<div class="mode-divider"></div>' +
       '<div class="mode-checkbox-wrap">' +
-        '<input type="checkbox" id="mode-enable-cb"' + (modeEnabled ? ' checked' : '') + (bothDisabled ? ' disabled' : '') + '>' +
-        '<label for="mode-enable-cb">Aktiv</label>' +
+        '<input type="checkbox" id="mode-enable-cb"' + (modeEnabled ? ' checked' : '') + '>' +
       '</div>' +
     '</div>';
 
@@ -300,7 +299,18 @@ function renderPill() {
       if (!vidsDisabled) trySetMode('vids'); else bouncePill('pos-right');
     });
     var cb = document.getElementById('mode-enable-cb');
-    cb.addEventListener('change', function() {
+    cb.addEventListener('change', async function() {
+      if (cb.checked) {
+        // Check availability on activation
+        await refreshSpotifyStatus();
+        var ok = (currentMode === 'music' && spotifyConnected) || (currentMode === 'vids' && vidsAvailable);
+        if (!ok) {
+          cb.checked = false;
+          modeEnabled = false;
+          bouncePill(currentMode === 'music' ? 'pos-left' : 'pos-right');
+          return;
+        }
+      }
       modeEnabled = cb.checked;
       applyMode();
     });
