@@ -155,13 +155,53 @@ app.get('/api/spotify/state', getUserFromSession, async function(req, res) {
       return res.json({ connected: false });
     }
     
+    var vol = state.device ? state.device.volume_percent : 50;
+    moduleStates.spotify.volume = vol;
+    
+    var track = state.item;
+    var trackInfo = null;
+    if (track) {
+      trackInfo = {
+        title: track.name,
+        artist: track.artists ? track.artists.map(function(a) { return a.name; }).join(', ') : 'Unknown',
+        coverUrl: (track.album && track.album.images && track.album.images[0]) ? track.album.images[0].url : null,
+        id: track.id
+      };
+    }
+    
     res.json({
       connected: true,
       isPlaying: state.is_playing,
-      volume: state.device ? state.device.volume_percent : 50
+      volume: vol,
+      track: trackInfo
     });
   } catch (err) {
     res.json({ connected: false });
+  }
+});
+
+app.get('/api/spotify/public', async function(req, res) {
+  try {
+    const state = await spotifyRequest('/me/player');
+    
+    if (!state || !state.item) {
+      return res.json({ connected: false, isPlaying: false });
+    }
+    
+    var track = state.item;
+    res.json({
+      connected: true,
+      isPlaying: state.is_playing,
+      volume: state.device ? state.device.volume_percent : 50,
+      track: {
+        title: track.name,
+        artist: track.artists ? track.artists.map(function(a) { return a.name; }).join(', ') : 'Unknown',
+        coverUrl: (track.album && track.album.images && track.album.images[0]) ? track.album.images[0].url : null,
+        id: track.id
+      }
+    });
+  } catch (err) {
+    res.json({ connected: false, isPlaying: false });
   }
 });
 
@@ -194,6 +234,7 @@ app.post('/api/spotify/skip', getUserFromSession, async function(req, res) {
 
 app.post('/api/spotify/volume', getUserFromSession, async function(req, res) {
   const volume = req.body.volume;
+  moduleStates.spotify.volume = volume;
   
   try {
     await spotifyRequest('/me/player/volume?volume_percent=' + volume, { method: 'PUT' });
@@ -203,6 +244,31 @@ app.post('/api/spotify/volume', getUserFromSession, async function(req, res) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Volume fade handler (called by Timer module)
+setInterval(async function() {
+  if (!moduleStates.spotify || !moduleStates.spotify.fadeDirection) return;
+  
+  var FADE_DURATION = 2000;
+  var elapsed = Date.now() - moduleStates.spotify.fadeStartTime;
+  var progress = Math.min(1, elapsed / FADE_DURATION);
+  
+  var start = moduleStates.spotify.previousVolume || 50;
+  var end = moduleStates.spotify.targetVolume || 50;
+  var newVol = Math.round(start + (end - start) * progress);
+  
+  try {
+    await spotifyRequest('/me/player/volume?volume_percent=' + newVol, { method: 'PUT' });
+    moduleStates.spotify.volume = newVol;
+  } catch (err) {
+    // ignore
+  }
+  
+  if (progress >= 1) {
+    moduleStates.spotify.fadeDirection = null;
+    console.log('[SPOTIFY] Fade complete, volume: ' + newVol + '%');
+  }
+}, 100);
   </script>
   
   <!-- ==========================================
