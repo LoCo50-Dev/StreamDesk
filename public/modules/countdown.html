@@ -222,21 +222,28 @@ async function checkModules() {
     var modRes  = await fetch(apiUrl + '/api/modules/list');
     var modData = await modRes.json();
     vidsAvailable = modData.modules.some(function(m) { return m.id === 'entertaining-countdown'; });
+  } catch(e) { vidsAvailable = false; }
 
-    var spRes  = await fetch(apiUrl + '/api/spotify/state', { headers: getHeaders() });
-    var spData = await spRes.json();
-    spotifyConnected = spData.connected || false;
+  await refreshSpotifyStatus();
 
-    if (!spotifyConnected && vidsAvailable) {
-      currentMode = 'vids';
-    } else if (spotifyConnected) {
-      currentMode = 'music';
-    }
-
-    renderPill();
-  } catch(e) {
-    console.error('[TIMER] checkModules error:', e);
+  if (spotifyConnected) {
+    currentMode = 'music';
+  } else if (vidsAvailable) {
+    currentMode = 'vids';
+  } else {
+    currentMode = 'music';
   }
+
+  renderPill();
+}
+
+async function refreshSpotifyStatus() {
+  try {
+    var spRes = await fetch(apiUrl + '/api/spotify/state', { headers: getHeaders() });
+    if (!spRes.ok) { spotifyConnected = false; return; }
+    var spData = await spRes.json();
+    spotifyConnected = spData.connected === true;
+  } catch(e) { spotifyConnected = false; }
 }
 
 function renderPill() {
@@ -395,15 +402,19 @@ async function updateTimerUI() {
     var res   = await fetch(apiUrl + '/api/timer', { headers: getHeaders() });
     var timer = await res.json();
 
-    // Periodically re-check Spotify
-    var spRes  = await fetch(apiUrl + '/api/spotify/state', { headers: getHeaders() });
-    var spData = await spRes.json();
-    var wasConnected = spotifyConnected;
-    spotifyConnected = spData.connected || false;
-
-    if (wasConnected && !spotifyConnected && currentMode === 'music') {
-      if (vidsAvailable) { currentMode = 'vids'; applyMode(); }
-      renderPill();
+    // Spotify re-check only every 10 seconds to avoid noise
+    if (typeof lastSpotifyCheck === 'undefined') lastSpotifyCheck = 0;
+    if (Date.now() - lastSpotifyCheck > 10000) {
+      lastSpotifyCheck = Date.now();
+      var wasConnected = spotifyConnected;
+      await refreshSpotifyStatus();
+      if (wasConnected && !spotifyConnected && currentMode === 'music' && vidsAvailable) {
+        currentMode = 'vids';
+        applyMode();
+        renderPill();
+      } else if (!wasConnected && spotifyConnected) {
+        renderPill(); // update pill to show music as available
+      }
     }
 
     if (timer.isRunning && timer.remaining > 0) {
