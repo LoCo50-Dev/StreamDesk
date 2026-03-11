@@ -211,11 +211,15 @@ setInterval(function() {
        CONTROLLER MODULE CODE
        ========================================== -->
   <script type="text/x-controller-module">
-var timerInterval   = null;
-var isUpdating      = false;
+var timerInterval    = null;
+var isUpdating       = false;
 var spotifyConnected = false;
-var vidsAvailable   = false;
-var currentMode     = 'music';
+var vidsAvailable    = false;
+var currentMode      = 'music';  // 'music' or 'vids'
+var modeEnabled      = false;    // checkbox state
+var lastSpotifyCheck = 0;
+
+// ── Module / Spotify check ────────────────────────────────────────────
 
 async function checkModules() {
   try {
@@ -226,13 +230,10 @@ async function checkModules() {
 
   await refreshSpotifyStatus();
 
-  if (spotifyConnected) {
-    currentMode = 'music';
-  } else if (vidsAvailable) {
-    currentMode = 'vids';
-  } else {
-    currentMode = 'music';
-  }
+  // Default mode selection
+  if (spotifyConnected) { currentMode = 'music'; }
+  else if (vidsAvailable) { currentMode = 'vids'; }
+  else { currentMode = 'music'; }
 
   renderPill();
 }
@@ -246,63 +247,67 @@ async function refreshSpotifyStatus() {
   } catch(e) { spotifyConnected = false; }
 }
 
+// ── Render pill + checkbox ────────────────────────────────────────────
+
 function renderPill() {
   var section = document.getElementById('timer-control-section');
   if (!section) return;
 
   var musicDisabled = !spotifyConnected;
   var vidsDisabled  = !vidsAvailable;
+  var bothDisabled  = musicDisabled && vidsDisabled;
 
   section.innerHTML =
     '<style>' +
-      '.pill-wrap {' +
-        'display:flex;align-items:center;justify-content:center;' +
-        'gap:10px;padding:8px 10px;background:#1a1a1a;' +
-        'border-radius:8px;margin-bottom:15px;' +
-      '}' +
-      '.pill-label {' +
-        'font-size:13px;font-weight:bold;transition:color 0.3s;' +
-        'user-select:none;min-width:55px;text-align:center;' +
-      '}' +
-      '.pill-label.active   { color:#fff; cursor:pointer; }' +
-      '.pill-label.inactive { color:#777; cursor:pointer; }' +
-      '.pill-label.disabled { color:#333; cursor:not-allowed; }' +
-      '.pill-track {' +
-        'position:relative;width:56px;height:28px;' +
-        'background:#2a2a2a;border:2px solid #444;' +
-        'border-radius:14px;cursor:pointer;transition:background 0.3s;flex-shrink:0;' +
-      '}' +
-      '.pill-track.all-disabled { opacity:0.3; cursor:not-allowed; }' +
-      '.pill-circle {' +
-        'position:absolute;top:2px;width:20px;height:20px;' +
-        'background:#fff;border-radius:50%;' +
-        'transition:left 0.35s cubic-bezier(0.4,0,0.2,1);' +
-        'box-shadow:0 2px 6px rgba(0,0,0,0.4);' +
-      '}' +
-      '.pill-circle.pos-left   { left:2px; }' +
-      '.pill-circle.pos-center { left:16px; }' +
-      '.pill-circle.pos-right  { left:30px; }' +
+      '.mode-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#1a1a1a;border-radius:8px;margin-bottom:15px;}' +
+      '.pill-wrap{display:flex;align-items:center;gap:8px;flex:1;}' +
+      '.pill-label{font-size:13px;font-weight:bold;transition:color 0.3s;user-select:none;min-width:50px;text-align:center;}' +
+      '.pill-label.active{color:#fff;cursor:pointer;}' +
+      '.pill-label.inactive{color:#777;cursor:pointer;}' +
+      '.pill-label.disabled{color:#333;cursor:not-allowed;}' +
+      '.pill-track{position:relative;width:50px;height:26px;background:#2a2a2a;border:2px solid #444;border-radius:13px;cursor:pointer;flex-shrink:0;}' +
+      '.pill-track.all-disabled{opacity:0.3;cursor:not-allowed;}' +
+      '.pill-circle{position:absolute;top:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:left 0.35s cubic-bezier(0.4,0,0.2,1);box-shadow:0 2px 5px rgba(0,0,0,0.4);}' +
+      '.pill-circle.pos-left{left:2px;}' +
+      '.pill-circle.pos-center{left:14px;}' +
+      '.pill-circle.pos-right{left:26px;}' +
+      '.mode-divider{width:1px;height:20px;background:#444;flex-shrink:0;}' +
+      '.mode-checkbox-wrap{display:flex;align-items:center;gap:6px;flex-shrink:0;}' +
+      '.mode-checkbox-wrap input[type=checkbox]{width:16px;height:16px;cursor:pointer;accent-color:#00BCD4;}' +
+      '.mode-checkbox-wrap label{font-size:12px;color:#aaa;cursor:pointer;user-select:none;white-space:nowrap;}' +
     '</style>' +
-    '<div class="pill-wrap">' +
-      '<span class="pill-label ' + (musicDisabled ? 'disabled' : (currentMode === 'music' ? 'active' : 'inactive')) + '" id="pill-lbl-music">🎵 Musik</span>' +
-      '<div class="pill-track ' + (musicDisabled && vidsDisabled ? 'all-disabled' : '') + '" id="pill-track">' +
-        '<div class="pill-circle ' + (currentMode === 'music' ? 'pos-left' : 'pos-right') + '" id="pill-circle"></div>' +
+    '<div class="mode-row">' +
+      '<div class="pill-wrap">' +
+        '<span class="pill-label ' + (musicDisabled ? 'disabled' : (currentMode==='music' ? 'active' : 'inactive')) + '" id="pill-lbl-music">🎵 Musik</span>' +
+        '<div class="pill-track' + (bothDisabled ? ' all-disabled' : '') + '" id="pill-track">' +
+          '<div class="pill-circle ' + (currentMode==='music' ? 'pos-left' : 'pos-right') + '" id="pill-circle"></div>' +
+        '</div>' +
+        '<span class="pill-label ' + (vidsDisabled ? 'disabled' : (currentMode==='vids' ? 'active' : 'inactive')) + '" id="pill-lbl-vids">🎬 Vids</span>' +
       '</div>' +
-      '<span class="pill-label ' + (vidsDisabled ? 'disabled' : (currentMode === 'vids' ? 'active' : 'inactive')) + '" id="pill-lbl-vids">🎬 Vids</span>' +
+      '<div class="mode-divider"></div>' +
+      '<div class="mode-checkbox-wrap">' +
+        '<input type="checkbox" id="mode-enable-cb"' + (modeEnabled ? ' checked' : '') + (bothDisabled ? ' disabled' : '') + '>' +
+        '<label for="mode-enable-cb">Aktiv</label>' +
+      '</div>' +
     '</div>';
 
-  if (!(musicDisabled && vidsDisabled)) {
+  if (!bothDisabled) {
     document.getElementById('pill-track').addEventListener('click', onPillClick);
+    document.getElementById('pill-lbl-music').addEventListener('click', function() {
+      if (!musicDisabled) trySetMode('music'); else bouncePill('pos-left');
+    });
+    document.getElementById('pill-lbl-vids').addEventListener('click', function() {
+      if (!vidsDisabled) trySetMode('vids'); else bouncePill('pos-right');
+    });
+    var cb = document.getElementById('mode-enable-cb');
+    cb.addEventListener('change', function() {
+      modeEnabled = cb.checked;
+      applyMode();
+    });
   }
-  document.getElementById('pill-lbl-music').addEventListener('click', function() {
-    if (!musicDisabled) trySetMode('music');
-    else bouncePill('pos-left');
-  });
-  document.getElementById('pill-lbl-vids').addEventListener('click', function() {
-    if (!vidsDisabled) trySetMode('vids');
-    else bouncePill('pos-right');
-  });
 }
+
+// ── Pill interaction ──────────────────────────────────────────────────
 
 function onPillClick() {
   var target = currentMode === 'music' ? 'vids' : 'music';
@@ -322,38 +327,28 @@ function bouncePill(returnPos) {
   var circle = document.getElementById('pill-circle');
   if (!circle) return;
   circle.className = 'pill-circle pos-center';
-  setTimeout(function() {
-    circle.className = 'pill-circle ' + returnPos;
-  }, 380);
+  setTimeout(function() { circle.className = 'pill-circle ' + returnPos; }, 380);
 }
 
 async function applyMode() {
   try {
+    if (!modeEnabled) {
+      // Checkbox off → disconnect everything
+      await fetch(apiUrl + '/api/timer/music-connect', { method:'POST', headers:getHeaders(), body:JSON.stringify({ connected: false }) });
+      if (vidsAvailable) await fetch(apiUrl + '/api/entertaining/state', { method:'POST', headers:getHeaders(), body:JSON.stringify({ enabled: false }) });
+      return;
+    }
     if (currentMode === 'music') {
-      await fetch(apiUrl + '/api/timer/music-connect', {
-        method: 'POST', headers: getHeaders(),
-        body: JSON.stringify({ connected: true })
-      });
-      if (vidsAvailable) {
-        await fetch(apiUrl + '/api/entertaining/state', {
-          method: 'POST', headers: getHeaders(),
-          body: JSON.stringify({ enabled: false })
-        });
-      }
+      await fetch(apiUrl + '/api/timer/music-connect', { method:'POST', headers:getHeaders(), body:JSON.stringify({ connected: true }) });
+      if (vidsAvailable) await fetch(apiUrl + '/api/entertaining/state', { method:'POST', headers:getHeaders(), body:JSON.stringify({ enabled: false }) });
     } else {
-      await fetch(apiUrl + '/api/timer/music-connect', {
-        method: 'POST', headers: getHeaders(),
-        body: JSON.stringify({ connected: false })
-      });
-      if (vidsAvailable) {
-        await fetch(apiUrl + '/api/entertaining/state', {
-          method: 'POST', headers: getHeaders(),
-          body: JSON.stringify({ enabled: true })
-        });
-      }
+      await fetch(apiUrl + '/api/timer/music-connect', { method:'POST', headers:getHeaders(), body:JSON.stringify({ connected: false }) });
+      if (vidsAvailable) await fetch(apiUrl + '/api/entertaining/state', { method:'POST', headers:getHeaders(), body:JSON.stringify({ enabled: true }) });
     }
   } catch(e) { console.error('[TIMER] applyMode error:', e); }
 }
+
+// ── Timer UI ──────────────────────────────────────────────────────────
 
 container.innerHTML =
   '<style>' +
@@ -366,12 +361,9 @@ container.innerHTML =
     '.timer-input-group input:focus{outline:none;border-color:#00BCD4;}' +
     '.timer-button-group{display:flex;gap:8px;margin-top:15px;}' +
     '.timer-button-group button{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;transition:all 0.3s;}' +
-    '.timer-btn-start{background:#4CAF50;color:white;}' +
-    '.timer-btn-start:hover{background:#45a049;}' +
-    '.timer-btn-pause{background:#FF9800;color:white;}' +
-    '.timer-btn-pause:hover{background:#e68900;}' +
-    '.timer-btn-reset{background:#f44336;color:white;}' +
-    '.timer-btn-reset:hover{background:#da190b;}' +
+    '.timer-btn-start{background:#4CAF50;color:white;}.timer-btn-start:hover{background:#45a049;}' +
+    '.timer-btn-pause{background:#FF9800;color:white;}.timer-btn-pause:hover{background:#e68900;}' +
+    '.timer-btn-reset{background:#f44336;color:white;}.timer-btn-reset:hover{background:#da190b;}' +
     '.hidden{display:none!important;}' +
   '</style>' +
   '<div class="timer-preview">' +
@@ -402,31 +394,22 @@ async function updateTimerUI() {
     var res   = await fetch(apiUrl + '/api/timer', { headers: getHeaders() });
     var timer = await res.json();
 
-    // Spotify re-check only every 10 seconds to avoid noise
-    if (typeof lastSpotifyCheck === 'undefined') lastSpotifyCheck = 0;
+    // Spotify re-check every 10s
     if (Date.now() - lastSpotifyCheck > 10000) {
       lastSpotifyCheck = Date.now();
       var wasConnected = spotifyConnected;
       await refreshSpotifyStatus();
-      if (wasConnected && !spotifyConnected && currentMode === 'music' && vidsAvailable) {
-        currentMode = 'vids';
-        applyMode();
-        renderPill();
-      } else if (!wasConnected && spotifyConnected) {
-        renderPill(); // update pill to show music as available
-      }
+      if (wasConnected !== spotifyConnected) renderPill();
     }
 
     if (timer.isRunning && timer.remaining > 0) {
       var mins = Math.floor(timer.remaining / 60);
       var secs = timer.remaining % 60;
-      previewTime.textContent = (mins < 10 ? '0' : '') + mins + ':' + (secs < 10 ? '0' : '') + secs;
+      previewTime.textContent = (mins<10?'0':'')+mins+':'+(secs<10?'0':'')+secs;
       if (timer.endTime && !timer.isPaused) {
         var d = new Date(timer.endTime);
-        previewEnd.textContent = 'Resume: ' + (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
-      } else {
-        previewEnd.textContent = 'Paused';
-      }
+        previewEnd.textContent = 'Resume: '+(d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();
+      } else { previewEnd.textContent = 'Paused'; }
       panel.style.borderColor = moduleConfig.activeColor;
       startBtn.classList.add('hidden');
       pauseBtn.classList.remove('hidden');
@@ -447,7 +430,7 @@ startBtn.addEventListener('click', async function() {
   isUpdating = true;
   var minutes = parseInt(timeInput.value) || 5;
   try {
-    await fetch(apiUrl + '/api/timer/start', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ minutes: minutes }) });
+    await fetch(apiUrl + '/api/timer/start', { method:'POST', headers:getHeaders(), body:JSON.stringify({ minutes: minutes }) });
     await updateTimerUI();
   } catch(e) { console.error('[TIMER] Start error:', e); }
   finally { isUpdating = false; }
@@ -459,7 +442,7 @@ pauseBtn.addEventListener('click', async function() {
     var res   = await fetch(apiUrl + '/api/timer', { headers: getHeaders() });
     var state = await res.json();
     var ep    = state.isPaused ? '/api/timer/resume' : '/api/timer/pause';
-    await fetch(apiUrl + ep, { method: 'POST', headers: getHeaders() });
+    await fetch(apiUrl + ep, { method:'POST', headers:getHeaders() });
     await updateTimerUI();
   } catch(e) { console.error('[TIMER] Pause error:', e); }
   finally { isUpdating = false; }
@@ -468,7 +451,7 @@ pauseBtn.addEventListener('click', async function() {
 resetBtn.addEventListener('click', async function() {
   isUpdating = true;
   try {
-    await fetch(apiUrl + '/api/timer/reset', { method: 'POST', headers: getHeaders() });
+    await fetch(apiUrl + '/api/timer/reset', { method:'POST', headers:getHeaders() });
     await updateTimerUI();
   } catch(e) { console.error('[TIMER] Reset error:', e); }
   finally { isUpdating = false; }
@@ -478,10 +461,8 @@ checkModules();
 timerInterval = setInterval(updateTimerUI, 1000);
 updateTimerUI();
 
-return {
-  destroy: function() { if (timerInterval) clearInterval(timerInterval); }
-};
-  </script>
+return { destroy: function() { if (timerInterval) clearInterval(timerInterval); } };
+</script>
 
   <!-- ==========================================
        OBS OVERLAY STYLES
